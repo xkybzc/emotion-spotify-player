@@ -1,0 +1,30 @@
+# --- Secrets: never commit these ---
+# Real Spotify credentials. Share .env.example instead.
+.env
+# OAuth token cache: contains a long-lived refresh_token for your account.
+.spotify_token_cache
+
+# --- Virtual environment (840 MB) ---
+# Rebuild with: python -m venv venv && pip install -r requirements.txt
+venv/
+.venv/
+
+# --- Python bytecode / build junk ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Hugging Face model downloads, if cached locally ---
+.cache/
+
+# --- Editor / OS noise ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# --- Local data ---
+# TODO(human): decide whether emotion_cache.json belongs in the repo.
+# Add a line for it below if you want it ignored, or leave this blank
+# to commit it.

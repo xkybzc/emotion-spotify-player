@@ -1,0 +1,5 @@
+spotipy
+transformers
+torch
+python-dotenv
+requests
