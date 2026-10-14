@@ -70,7 +70,7 @@ def estimate_energy_from_genres(genres):
 def fetch_lyrics(artist, title):
     """Free, no-auth lyrics lookup. Returns "" if not found."""
     try:
-        resp = requests.get(f"https://api.lyrics.ovh/v1/{artist}/{title}", timeout=5)
+        resp = requests.get(f"https://api.lyrics.ovh/v1/{artist}/{title}", timeout=5) #get lyrics from lyrics.ovh API
         if resp.status_code == 200:
             return resp.json().get("lyrics", "")
     except requests.RequestException:

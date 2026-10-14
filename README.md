@@ -33,7 +33,7 @@ not a fine-grained mood engine. If you want better lyrics coverage, swap
 
 ## Setup
 
-1. Create a Spotify app at https://developer.spotify.com/dashboard
+1. Create a Spotify app at https://developer.potify.com/dashboard
    (free). Add `http://127.0.0.1:8888/callback` as a Redirect URI in the
    app settings.
 2. Copy `.env.example` to `.env` and fill in your Client ID/Secret.
@@ -45,6 +45,32 @@ not a fine-grained mood engine. If you want better lyrics coverage, swap
    link. The ID is the string after `/playlist/` in the URL.
 
 ## Run
+
+### Window mode
+
+Run the project without arguments:
+
+```bash
+python main.py
+```
+
+This opens a terminal-style window. It asks for a playlist ID or link, then
+asks you to type `happy`, `sad`, `energetic`, or `calm`. Playback starts after
+you enter the mood. While playing, type `stop`, `forward`, `backward`, or
+`exit`. You can also type a mood while a song is playing to correct that
+song's mood; the correction is saved when the song changes and is remembered
+on future runs.
+
+All matching songs already in the playlist are queued before any songs found
+by Spotify search. The application searches for and appends outside songs while
+the playlist songs are playing. It prints the name and artist whenever the
+current song changes.
+
+Spotify must be open on an active device, and playback control requires Spotify
+Premium. Public playlist links can be entered, but Spotify development-mode
+access may reject playlists that the application cannot read.
+
+### Command-line mode
 
 ```bash
 python main.py --playlist YOUR_PLAYLIST_ID --mood sad

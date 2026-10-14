@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import threading
 import time
 
 import config
@@ -35,86 +36,161 @@ def classify_track(sp, track, cache):
 
 
 def classify_library(sp, playlist_id):
-    """
-    Classify every track in the playlist into a mood bucket.
-    Results are cached locally by track id so re-runs don't
-    re-hit the lyrics API / re-run the model on the same song.
-    """
     cache = load_cache()
     tracks = sc.get_playlist_tracks(sp, playlist_id)
     buckets = {m: [] for m in MOODS}
-
-    for t in tracks:
-        buckets[classify_track(sp, t, cache)].append(t)
-
+    for track in tracks:
+        buckets[classify_track(sp, track, cache)].append(track)
     save_cache(cache)
-    return buckets, {t["id"] for t in tracks}
+    return buckets, {track["id"] for track in tracks}
 
 
-def build_queue_for_mood(sp, mood, buckets, all_ids, target_count=40):
-    queue = buckets.get(mood, [])[:]
-    random.shuffle(queue)
+class PlaybackSession:
+    def __init__(self, playlist_id, mood):
+        self.playlist_id = playlist_id
+        self.mood = mood
+        self.sp = None
+        self.device_id = None
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.current_track_id = None
+        self.pending_mood = None
+        self.cache = {}
 
-    if len(queue) < target_count:
-        print(f"Only {len(queue)} '{mood}' tracks in your playlist; searching Spotify for more...")
-        cache = load_cache()
-        exclude = all_ids | {t["id"] for t in queue}
-        external = sc.find_external_tracks_for_mood(sp, mood, exclude)
-        print(f"Found {len(external)} candidates, checking their mood (cached ones are instant)...")
+    def run(self):
+        self.sp = sc.get_spotify_client()
+        print("Reading and classifying your playlist...")
+        buckets, all_ids = classify_library(self.sp, self.playlist_id)
+        self.cache = load_cache()
+        local_tracks = buckets.get(self.mood, [])[:]
+        random.shuffle(local_tracks)
 
-        checked = 0
-        for t in external:
-            if len(queue) >= target_count:
+        if not local_tracks:
+            print(f"No '{self.mood}' track is ready yet; searching Spotify before starting...")
+            external = sc.find_external_tracks_for_mood(
+                self.sp, self.mood, all_ids, pages_per_query=1
+            )
+            local_tracks = self._matching_tracks(external, 1)
+        if not local_tracks:
+            print(f"Couldn't find any '{self.mood}' tracks.")
+            return
+
+        self.device_id = sc.get_active_device_id(self.sp)
+        if not self.device_id:
+            print("No active Spotify device found. Open Spotify and try again.")
+            return
+
+        first = local_tracks.pop(0)
+        self.current_track_id = first["id"]
+        sc.play_uris(self.sp, [first["uri"]], device_id=self.device_id)
+        print(f"Now playing: {first['name']} by {first['artist']}")
+        print("Commands: stop, forward, backward, exit, or type a mood to correct the current song.")
+
+        threading.Thread(
+            target=self._fill_queue,
+            args=(local_tracks, all_ids | {first["id"]}),
+            daemon=True,
+        ).start()
+        self._monitor()
+
+    def _matching_tracks(self, candidates, target_count):
+        matches = []
+        for track in candidates:
+            if len(matches) >= target_count:
                 break
-            # Re-check mood ourselves; a genre search is only a rough
-            # signal and can return mislabeled tracks.
-            if classify_track(sp, t, cache) == mood:
-                queue.append(t)
-            checked += 1
-            if checked % 25 == 0:
-                print(f"  checked {checked}/{len(external)}, queue now {len(queue)}")
-                save_cache(cache)
+            if classify_track(self.sp, track, self.cache) == self.mood:
+                matches.append(track)
+        save_cache(self.cache)
+        return matches
 
-        save_cache(cache)
-        added = len(queue) - (len(buckets.get(mood, [])))
-        print(f"Added {added} '{mood}' tracks from Spotify search.")
+    def _fill_queue(self, local_tracks, exclude_ids):
+        queued_ids = set(exclude_ids)
+        playlist_count = 0
+        for track in local_tracks:
+            if self.stop_event.is_set():
+                return
+            if self._queue_track(track, queued_ids):
+                playlist_count += 1
 
-    return queue
+        print(
+            f"Queued {playlist_count} more '{self.mood}' songs from your playlist first."
+        )
+        print("Searching for more matching songs while those playlist songs play...")
+        external = sc.find_external_tracks_for_mood(
+            self.sp, self.mood, queued_ids, pages_per_query=3
+        )
+        for track in external:
+            if self.stop_event.is_set():
+                return
+            if classify_track(self.sp, track, self.cache) == self.mood:
+                self._queue_track(track, queued_ids)
+        save_cache(self.cache)
 
+    def _queue_track(self, track, queued_ids):
+        if track["id"] in queued_ids:
+            return False
+        try:
+            sc.add_to_queue(self.sp, track["uri"], device_id=self.device_id)
+            queued_ids.add(track["id"])
+            print(f"Added to queue: {track['name']} by {track['artist']}")
+            return True
+        except Exception as error:
+            print(f"Could not add '{track['name']}' to the queue: {error}")
+            return False
 
-def monitor_now_playing(sp, first_track_id, poll_seconds=3):
-    """Prints the track name/artist every time the playing song changes.
-    Runs until you press Ctrl+C; playback itself keeps going either way."""
-    last_id = first_track_id
-    print("Watching for song changes (Ctrl+C to stop watching -- playback keeps going).")
-    try:
-        while True:
-            time.sleep(poll_seconds)
-            current = sc.get_currently_playing(sp)
-            if current and current["id"] != last_id:
-                print(f"Now playing: {current['name']} by {current['artist']}")
-                last_id = current["id"]
-    except KeyboardInterrupt:
-        print("\nStopped watching (music keeps playing on your device).")
+    def _monitor(self):
+        last_id = self.current_track_id
+        while not self.stop_event.wait(3):
+            current = sc.get_currently_playing(self.sp)
+            if not current or current["id"] == last_id:
+                continue
+            self._apply_pending_mood()
+            last_id = current["id"]
+            self.current_track_id = last_id
+            print(f"Now playing: {current['name']} by {current['artist']}")
+        self._apply_pending_mood()
+
+    def correct_current_mood(self, mood):
+        if mood not in MOODS:
+            return
+        with self.lock:
+            if not self.current_track_id:
+                print("No current song is available for correction yet.")
+                return
+            self.pending_mood = mood
+        print(f"Marked the current song as '{mood}'. It will be saved when the song changes.")
+
+    def _apply_pending_mood(self):
+        with self.lock:
+            if not self.pending_mood or not self.current_track_id:
+                return
+            self.cache[self.current_track_id] = self.pending_mood
+            save_cache(self.cache)
+            print(f"Saved mood correction: {self.current_track_id} -> {self.pending_mood}")
+            self.pending_mood = None
+
+    def stop(self):
+        if self.sp and self.device_id:
+            sc.stop_playback(self.sp, device_id=self.device_id)
+            print("Playback paused.")
+
+    def forward(self):
+        if self.sp and self.device_id:
+            sc.skip_forward(self.sp, device_id=self.device_id)
+            print("Moved forward.")
+
+    def backward(self):
+        if self.sp and self.device_id:
+            sc.skip_backward(self.sp, device_id=self.device_id)
+            print("Moved backward.")
+
+    def exit(self):
+        self._apply_pending_mood()
+        self.stop_event.set()
+        if self.sp and self.device_id:
+            sc.stop_playback(self.sp, device_id=self.device_id)
 
 
 def run(playlist_id, mood):
-    sp = sc.get_spotify_client()
-
-    print("Reading and classifying your playlist (first run can take a while)...")
-    buckets, all_ids = classify_library(sp, playlist_id)
-    queue = build_queue_for_mood(sp, mood, buckets, all_ids)
-
-    if not queue:
-        print(f"Couldn't find any '{mood}' tracks in the playlist or nearby playlists.")
-        return
-
-    device_id = sc.get_active_device_id(sp)
-    if not device_id:
-        print("No active Spotify device found. Open Spotify on a device (phone, desktop, web) and try again.")
-        return
-
-    uris = [t["uri"] for t in queue]
-    sc.play_uris(sp, uris, device_id=device_id)
-    print(f"Playing {len(uris)} '{mood}' tracks, starting with '{queue[0]['name']}' by {queue[0]['artist']}.")
-    monitor_now_playing(sp, first_track_id=queue[0]["id"])
+    """Compatibility wrapper for callers that used the original run function."""
+    PlaybackSession(playlist_id, mood).run()

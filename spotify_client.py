@@ -148,6 +148,22 @@ def play_uris(sp, uris, device_id=None):
     sp.start_playback(device_id=device_id, uris=uris[:100])
 
 
+def add_to_queue(sp, uri, device_id=None):
+    sp.add_to_queue(uri=uri, device_id=device_id)
+
+
+def stop_playback(sp, device_id=None):
+    sp.pause_playback(device_id=device_id)
+
+
+def skip_forward(sp, device_id=None):
+    sp.next_track(device_id=device_id)
+
+
+def skip_backward(sp, device_id=None):
+    sp.previous_track(device_id=device_id)
+
+
 def get_currently_playing(sp):
     """Returns {'id', 'name', 'artist'} for the currently playing track, or None."""
     current = sp.current_playback()
