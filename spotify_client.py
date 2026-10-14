@@ -133,6 +133,10 @@ def find_external_tracks_for_mood(sp, mood_keyword, exclude_ids, pages_per_query
                 if q.startswith("genre:"):
                     d["genre_hint"] = q[len("genre:"):]
                 candidates.append(d)
+                if len(candidates) >= max_candidates:
+                    break
+            if len(candidates) >= max_candidates:
+                break
 
     random.shuffle(candidates)
     return candidates
@@ -177,6 +181,19 @@ def get_currently_playing(sp):
     if not current or not current.get("item"):
         return None
     item = current["item"]
+    return {
+        "id": item["id"],
+        "name": item["name"],
+        "artist": item["artists"][0]["name"] if item["artists"] else "",
+    }
+
+
+def get_next_track(sp):
+    """Return the next queued track in Spotify's playback queue, if any."""
+    queue = sp.queue().get("queue", [])
+    if not queue:
+        return None
+    item = queue[0]
     return {
         "id": item["id"],
         "name": item["name"],

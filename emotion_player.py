@@ -9,6 +9,7 @@ import spotify_client as sc
 import lyrics_emotion as le
 
 MOODS = ["happy", "sad", "energetic", "calm"]
+MINIMUM_PLAYLIST_TOTAL = 12
 
 
 def load_cache():
@@ -60,24 +61,35 @@ class PlaybackSession:
         self.current_track_id = None
         self.pending_mood = None
         self.cache = {}
+        self.last_next_track_id = None
 
     def run(self):
-        # Classify the playlist before choosing and ordering tracks to play.
+        # Classify the playlist before choosing the requested mood.
         self.sp = sc.get_spotify_client()
-        print("Reading and classifying your playlist...")
         buckets, all_ids = classify_library(self.sp, self.playlist_id)
         self.cache = load_cache()
         local_tracks = buckets.get(self.mood, [])[:]
         random.shuffle(local_tracks)
 
         if not local_tracks:
-            # Use Spotify search as a fallback when the playlist has no matching songs.
-            print(f"No '{self.mood}' track is ready yet; searching Spotify before starting...")
+            print(f"No '{self.mood}' track was found in the playlist.")
+
+        # Find outside songs before playback so they can be placed after the
+        # playlist songs in one ordered start_playback request.
+        tracks_to_play = local_tracks[:]
+        external_needed = max(0, MINIMUM_PLAYLIST_TOTAL - len(tracks_to_play))
+        if external_needed:
             external = sc.find_external_tracks_for_mood(
-                self.sp, self.mood, all_ids, pages_per_query=1
+                self.sp,
+                self.mood,
+                all_ids,
+                pages_per_query=1,
+                max_candidates=max(external_needed * 3, 12),
             )
-            local_tracks = self._matching_tracks(external, 1)
-        if not local_tracks:
+            tracks_to_play.extend(
+                self._matching_tracks(external, external_needed)
+            )
+        if not tracks_to_play:
             print(f"Couldn't find any '{self.mood}' tracks.")
             return
 
@@ -86,18 +98,19 @@ class PlaybackSession:
             print("No active Spotify device found. Open Spotify and try again.")
             return
 
-        first = local_tracks.pop(0)
+        first = tracks_to_play[0]
         self.current_track_id = first["id"]
-        # Start the first track immediately, then fill the queue in the background.
-        sc.play_uris(self.sp, [first["uri"]], device_id=self.device_id)
+        # Spotify's queue endpoint inserts items next, so send the complete
+        # playlist-first order in a single playback request instead.
+        playlist_batch = tracks_to_play[:100]
+        sc.play_uris(
+            self.sp,
+            [track["uri"] for track in playlist_batch],
+            device_id=self.device_id,
+        )
         print(f"Now playing: {first['name']} by {first['artist']}")
         print("Commands: stop, forward, backward, exit, or type a mood to correct the current song.")
-
-        threading.Thread(
-            target=self._fill_queue,
-            args=(local_tracks, all_ids | {first["id"]}),
-            daemon=True,
-        ).start()
+        self._print_next_track()
         self._monitor()
 
     def _matching_tracks(self, candidates, target_count):
@@ -111,54 +124,31 @@ class PlaybackSession:
         save_cache(self.cache)
         return matches
 
-    def _fill_queue(self, local_tracks, exclude_ids):
-        # Prefer the user's playlist before adding externally discovered tracks.
-        queued_ids = set(exclude_ids)
-        playlist_count = 0
-        for track in local_tracks:
-            if self.stop_event.is_set():
-                return
-            if self._queue_track(track, queued_ids):
-                playlist_count += 1
-
-        print(
-            f"Queued {playlist_count} more '{self.mood}' songs from your playlist first."
-        )
-        print("Searching for more matching songs while those playlist songs play...")
-        external = sc.find_external_tracks_for_mood(
-            self.sp, self.mood, queued_ids, pages_per_query=3
-        )
-        for track in external:
-            if self.stop_event.is_set():
-                return
-            if classify_track(self.sp, track, self.cache) == self.mood:
-                self._queue_track(track, queued_ids)
-        save_cache(self.cache)
-
-    def _queue_track(self, track, queued_ids):
-        # Prevent duplicate tracks from being added to the Spotify queue.
-        if track["id"] in queued_ids:
-            return False
-        try:
-            sc.add_to_queue(self.sp, track["uri"], device_id=self.device_id)
-            queued_ids.add(track["id"])
-            print(f"Added to queue: {track['name']} by {track['artist']}")
-            return True
-        except Exception as error:
-            print(f"Could not add '{track['name']}' to the queue: {error}")
-            return False
+    def _print_next_track(self):
+        next_track = sc.get_next_track(self.sp)
+        next_id = next_track["id"] if next_track else None
+        if next_id == self.last_next_track_id:
+            return
+        self.last_next_track_id = next_id
+        if next_track:
+            print(f"Next: {next_track['name']} by {next_track['artist']}")
+        else:
+            print("Next: none")
 
     def _monitor(self):
         last_id = self.current_track_id
         # Poll Spotify so the app can report song changes and save corrections.
         while not self.stop_event.wait(3):
             current = sc.get_currently_playing(self.sp)
-            if not current or current["id"] == last_id:
+            if current and current["id"] == last_id:
+                continue
+            if not current:
                 continue
             self._apply_pending_mood()
             last_id = current["id"]
             self.current_track_id = last_id
             print(f"Now playing: {current['name']} by {current['artist']}")
+            self._print_next_track()
         self._apply_pending_mood()
 
     def correct_current_mood(self, mood):
