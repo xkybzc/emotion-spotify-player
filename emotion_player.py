@@ -12,6 +12,7 @@ MOODS = ["happy", "sad", "energetic", "calm"]
 
 
 def load_cache():
+    # Reuse previous classifications so tracks do not need to be analyzed again.
     if os.path.exists(config.CACHE_FILE):
         with open(config.CACHE_FILE, "r") as f:
             return json.load(f)
@@ -19,12 +20,14 @@ def load_cache():
 
 
 def save_cache(cache):
+    # Persist classifications between runs of the player.
     with open(config.CACHE_FILE, "w") as f:
         json.dump(cache, f, indent=2)
 
 
 def classify_track(sp, track, cache):
     """Mood for one track, using (and filling) the local cache."""
+    # Cached moods avoid repeated API calls and model inference.
     mood = cache.get(track["id"])
     if mood is None:
         genres = sc.get_artist_genres(sp, track.get("artist_id"))
@@ -36,6 +39,7 @@ def classify_track(sp, track, cache):
 
 
 def classify_library(sp, playlist_id):
+    # Build one list per mood so playback can select the requested category.
     cache = load_cache()
     tracks = sc.get_playlist_tracks(sp, playlist_id)
     buckets = {m: [] for m in MOODS}
@@ -58,6 +62,7 @@ class PlaybackSession:
         self.cache = {}
 
     def run(self):
+        # Classify the playlist before choosing and ordering tracks to play.
         self.sp = sc.get_spotify_client()
         print("Reading and classifying your playlist...")
         buckets, all_ids = classify_library(self.sp, self.playlist_id)
@@ -66,6 +71,7 @@ class PlaybackSession:
         random.shuffle(local_tracks)
 
         if not local_tracks:
+            # Use Spotify search as a fallback when the playlist has no matching songs.
             print(f"No '{self.mood}' track is ready yet; searching Spotify before starting...")
             external = sc.find_external_tracks_for_mood(
                 self.sp, self.mood, all_ids, pages_per_query=1
@@ -82,6 +88,7 @@ class PlaybackSession:
 
         first = local_tracks.pop(0)
         self.current_track_id = first["id"]
+        # Start the first track immediately, then fill the queue in the background.
         sc.play_uris(self.sp, [first["uri"]], device_id=self.device_id)
         print(f"Now playing: {first['name']} by {first['artist']}")
         print("Commands: stop, forward, backward, exit, or type a mood to correct the current song.")
@@ -94,6 +101,7 @@ class PlaybackSession:
         self._monitor()
 
     def _matching_tracks(self, candidates, target_count):
+        # Search results are only candidates; lyrics and genre data decide the final mood.
         matches = []
         for track in candidates:
             if len(matches) >= target_count:
@@ -104,6 +112,7 @@ class PlaybackSession:
         return matches
 
     def _fill_queue(self, local_tracks, exclude_ids):
+        # Prefer the user's playlist before adding externally discovered tracks.
         queued_ids = set(exclude_ids)
         playlist_count = 0
         for track in local_tracks:
@@ -127,6 +136,7 @@ class PlaybackSession:
         save_cache(self.cache)
 
     def _queue_track(self, track, queued_ids):
+        # Prevent duplicate tracks from being added to the Spotify queue.
         if track["id"] in queued_ids:
             return False
         try:
@@ -140,6 +150,7 @@ class PlaybackSession:
 
     def _monitor(self):
         last_id = self.current_track_id
+        # Poll Spotify so the app can report song changes and save corrections.
         while not self.stop_event.wait(3):
             current = sc.get_currently_playing(self.sp)
             if not current or current["id"] == last_id:
@@ -151,6 +162,7 @@ class PlaybackSession:
         self._apply_pending_mood()
 
     def correct_current_mood(self, mood):
+        # Delay the correction until the song changes so it applies to the song just heard.
         if mood not in MOODS:
             return
         with self.lock:
@@ -161,6 +173,7 @@ class PlaybackSession:
         print(f"Marked the current song as '{mood}'. It will be saved when the song changes.")
 
     def _apply_pending_mood(self):
+        # Save a pending correction against the last known track ID.
         with self.lock:
             if not self.pending_mood or not self.current_track_id:
                 return

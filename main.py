@@ -11,6 +11,7 @@ from emotion_player import MOODS, PlaybackSession
 
 def playlist_id_from_input(value):
     """Accept a Spotify playlist ID, URL, or URI and return its ID."""
+    # Normalize all supported input formats to the ID expected by Spotify.
     value = value.strip()
     match = re.search(r"(?:playlist/|playlist:)([A-Za-z0-9]+)", value)
     if match:
@@ -22,6 +23,7 @@ def playlist_id_from_input(value):
 
 class TerminalWindow:
     def __init__(self, root):
+        # Configure the terminal-style interface and its shared output queue.
         self.root = root
         self.root.title("Mood Spotify Player")
         self.root.geometry("800x560")
@@ -36,7 +38,7 @@ class TerminalWindow:
             fg="#d7d7d7",
             insertbackground="#ffffff",
             relief="flat",
-            font=("Consolas", 11),
+            font=("VT323", 12),
             state="disabled",
             wrap="word",
         )
@@ -47,7 +49,7 @@ class TerminalWindow:
             fg="#ffffff",
             insertbackground="#ffffff",
             relief="flat",
-            font=("Consolas", 11),
+            font=("VT323", 18),
         )
         self.entry.pack(fill="x", padx=12, pady=(4, 12), ipady=8)
         self.entry.bind("<Return>", self.handle_input)
@@ -64,6 +66,7 @@ class TerminalWindow:
         self.output.configure(state="disabled")
 
     def flush_output(self):
+        # Move worker-thread messages onto Tkinter's UI thread safely.
         while True:
             try:
                 self.write(self.output_queue.get_nowait())
@@ -72,6 +75,7 @@ class TerminalWindow:
         self.root.after(100, self.flush_output)
 
     def handle_input(self, _event=None):
+        # Advance through playlist selection, mood selection, and playback commands.
         value = self.entry.get().strip()
         self.entry.delete(0, "end")
         if not value:
@@ -116,6 +120,7 @@ class TerminalWindow:
                 pass
 
         old_stdout = sys.stdout
+        # Redirect session output so background work appears in the GUI.
         sys.stdout = QueueWriter(self.output_queue)
         try:
             self.session = PlaybackSession(playlist_id, mood)
@@ -126,6 +131,7 @@ class TerminalWindow:
             sys.stdout = old_stdout
 
     def handle_command(self, command):
+        # Translate text commands into operations on the active playback session.
         if command in MOODS:
             if self.session:
                 self.session.correct_current_mood(command)
@@ -146,6 +152,7 @@ class TerminalWindow:
             )
 
     def run_session_command(self, command):
+        # Keep Spotify operations off the UI thread so the window stays responsive.
         if self.session:
             threading.Thread(
                 target=getattr(self.session, command),
@@ -161,12 +168,14 @@ class TerminalWindow:
 
 
 def run_gui():
+    # Start the Tkinter event loop for interactive use without CLI arguments.
     root = tk.Tk()
     TerminalWindow(root)
     root.mainloop()
 
 
 def main():
+    # CLI mode accepts direct arguments; without a playlist it opens the GUI.
     parser = argparse.ArgumentParser(description="Play Spotify tracks that match your mood.")
     parser.add_argument("--playlist", help="Your Spotify playlist ID, URL, or URI")
     parser.add_argument("--mood", choices=MOODS, help="Mood to play (omit to be asked)")

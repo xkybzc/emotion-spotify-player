@@ -1,8 +1,10 @@
 import os
 from dotenv import load_dotenv # read key values from .env file
 
+# Load local environment variables before reading Spotify credentials.
 load_dotenv()
 
+# These values authenticate the app and configure Spotify's callback URL.
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")

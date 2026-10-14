@@ -7,6 +7,7 @@ def _get_classifier():
     """Lazy-load the model so `import lyrics_emotion` stays fast."""
     global _classifier
     if _classifier is None:
+        # Load the transformer only when classification is first requested.
         from transformers import pipeline
         _classifier = pipeline(
             "text-classification",
@@ -57,6 +58,7 @@ LOW_ENERGY_GENRE_KEYWORDS = [
 
 
 def estimate_energy_from_genres(genres):
+    # Genre keywords provide an approximate energy level when audio features are unavailable.
     if not genres:
         return None
     text = " ".join(genres).lower()
@@ -80,6 +82,7 @@ def fetch_lyrics(artist, title):
 
 def classify_mood(artist, title, genres=None):
     """Returns one of: happy, sad, energetic, calm."""
+    # Combine lyric sentiment (valence) with genre-based intensity (energy).
     lyrics = fetch_lyrics(artist, title)
     energy = estimate_energy_from_genres(genres)
 
@@ -87,6 +90,7 @@ def classify_mood(artist, title, genres=None):
         # No lyrics to read tone from -> fall back to genre-only guess.
         return "energetic" if energy == "high" else "calm"
 
+    # Limit the model input to keep each classification reasonably fast.
     snippet = lyrics[:2000]  # keep inference fast
     result = _get_classifier()(snippet)[0][0]
     label = result["label"].lower()

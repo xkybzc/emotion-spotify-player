@@ -5,6 +5,7 @@ import config
 
 
 def get_spotify_client():
+    # Spotipy manages OAuth login and reuses the saved token cache.
     auth_manager = SpotifyOAuth(
         client_id=config.SPOTIFY_CLIENT_ID,
         client_secret=config.SPOTIFY_CLIENT_SECRET,
@@ -16,6 +17,7 @@ def get_spotify_client():
 
 
 def _track_to_dict(t):
+    # Keep only the track fields used by classification and playback.
     artist = t["artists"][0] if t["artists"] else {}
     return {
         "id": t["id"],
@@ -31,6 +33,7 @@ _genre_cache = {}
 
 def get_artist_genres(sp, artist_id):
     """Cached lookup so we don't re-fetch the same artist's genres repeatedly."""
+    # Cache genre lookups because the same artist can appear on many tracks.
     if not artist_id:
         return []
     if artist_id not in _genre_cache:
@@ -45,6 +48,7 @@ def get_artist_genres(sp, artist_id):
 
 def get_playlist_tracks(sp, playlist_id):
     """All tracks in a playlist, as [{id, uri, name, artist}, ...]."""
+    # Follow Spotify pagination until every playlist track has been collected.
     tracks = []
     results = sp.playlist_items(playlist_id)
     while results:
@@ -97,6 +101,7 @@ def find_external_tracks_for_mood(sp, mood_keyword, exclude_ids, pages_per_query
     """
     import random
 
+    # Search several randomized queries, then remove duplicate or excluded tracks.
     candidates = []
     seen = set(exclude_ids)
     queries = MOOD_SEARCH_QUERIES.get(mood_keyword, [f"{mood_keyword} songs"])[:]
@@ -134,6 +139,7 @@ def find_external_tracks_for_mood(sp, mood_keyword, exclude_ids, pages_per_query
 
 
 def get_active_device_id(sp):
+    # Prefer the active device; otherwise use the first available device.
     devices = sp.devices().get("devices", [])
     for d in devices:
         if d.get("is_active"):
@@ -166,6 +172,7 @@ def skip_backward(sp, device_id=None):
 
 def get_currently_playing(sp):
     """Returns {'id', 'name', 'artist'} for the currently playing track, or None."""
+    # Convert Spotify's nested playback response into the app's small track shape.
     current = sp.current_playback()
     if not current or not current.get("item"):
         return None
